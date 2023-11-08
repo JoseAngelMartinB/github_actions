@@ -1,0 +1,62 @@
+name: Reusable Python memory profiler
+on:
+  workflow_call:
+    inputs:
+      py3version:
+        description: "Minor version of Python version 3 to run the test on (e.g. `11` for python v3.11)"
+        required: true
+        type: string
+      additional_mamba_args:
+        description: "Any additional arguments to pass to micromamba when creating the python environment"
+        required: false
+        default: ""
+        type: string
+      upload_flamegraph:
+        description: "If True, upload the memory profiling flamegraph as an action artefact"
+        required: false
+        default: false
+        type: boolean
+
+defaults:
+  run:
+    shell: bash -l {0}
+
+jobs:
+  memory-profiler:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: mamba-org/setup-micromamba@v1
+        with:
+          micromamba-version: latest
+          environment-name: ${{ github.event.repository.name }}-ubuntu-latest-3${{ inputs.py3version }}-profiling
+          environment-file: requirements/base.txt
+          create-args: >-
+            ${{ inputs.additional_mamba_args }}
+            -c city-modelling-lab
+            -f requirements/dev.txt
+            python=3.${{ inputs.py3version }}
+            memray=1.9
+            pytest-memray=1.5
+          post-cleanup: all
+          cache-environment: true
+
+      - name: Install package
+        run: pip install --no-dependencies .
+
+      - name: Run memory and time profiling test
+        run: |
+          mkdir $HOME/flamegraphs;
+          pytest tests/ -p memray -m "high_mem" --no-cov --memray-bin-path=$HOME/flamegraphs --memray-bin-prefix=${{ github.sha }}
+
+      - name: Produce flamegraph
+        if: inputs.upload_flamegraph == true
+        run: for binfile in $HOME/flamegraphs/*.bin; do memray flamegraph $binfile; done
+
+      - name: Upload flamegraph(s)
+        if: inputs.upload_flamegraph == true
+        uses: actions/upload-artifact@v3
+        with:
+          name: memory-profiling-flamegraphs
+          path: ~/flamegraphs/*.html
+          if-no-files-found: error
